@@ -561,7 +561,7 @@ function jobCard(j){
   const c=calcJob(j,DB.employees);
   const segTxt=j.segments.map(s=>`${s.start}–${s.end} (${multLabel(multiplierOf(s.dayType,bandOf(toMin(s.start))))})`).join(' · ');
   return `<details><summary>
-      <span>${j.jobName?`<b>${esc(j.jobName)}</b> · `:''}${esc(fmtThaiDate(j.date))}</span>
+      <span>${esc(fmtThaiDate(j.date))}${j.jobName?` · <b>${esc(j.jobName)}</b>`:''}</span>
       <span class="money accent">${fmt(c.grandTotal)} ฿</span>
     </summary><div class="body">
       <div class="small" style="margin-bottom:8px">${segTxt}</div>
