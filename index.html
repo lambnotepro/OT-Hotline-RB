@@ -181,6 +181,7 @@
    PEA Hotline OT Calculator
    - storage: localStorage (default) OR Firebase Firestore (when configured)
    - calc engine verified against spec examples (a) & (b)
+   - FIX: หักพักเที่ยง 12:00–13:00 (segHours) + เรียงตารางชื่อตามเงินเดือนมาก→น้อย
    ============================================================ */
 
 /* >>>>>>>>>>>>>>>>>>>>  FIREBASE CONFIG  <<<<<<<<<<<<<<<<<<<<
@@ -218,6 +219,14 @@ const uid=()=> (crypto.randomUUID? crypto.randomUUID() : 'id'+Date.now()+Math.ra
 /* ---------- calc engine (verified) ---------- */
 function round2(n){return Math.round((n+Number.EPSILON)*100)/100;}
 function toMin(t){const[h,m]=String(t).split(':').map(Number);return h*60+m;}
+/* คิดชั่วโมงจริง = (เสร็จ−เริ่ม) แล้วหักช่วงที่คาบเกี่ยวพักเที่ยง 12:00–13:00 (720–780 นาที)
+   เช่น 09:00–16:00 → (960−540−60)/60 = 6.0 ชม.  /  ช่วงที่ไม่คาบเที่ยงจะไม่ถูกหัก */
+function segHours(start,end){
+  const s=toMin(start),e=toMin(end);
+  let mins=Math.max(0,e-s);
+  const lunch=Math.max(0,Math.min(e,780)-Math.max(s,720));
+  return Math.max(0,mins-lunch)/60;
+}
 function bandOf(sMin){return (sMin>=480&&sMin<1020)?'day':'night';}
 function multiplierOf(dayType,band){
   const weekend=(dayType==='sat'||dayType==='sun'||dayType==='holiday');
@@ -237,7 +246,7 @@ function calcJob(job,employees){
   (job.segments||[]).forEach((s,idx)=>{
     const sMin=toMin(s.start),eMin=toMin(s.end),band=bandOf(sMin);
     const mult=(s.multiplier!=null)?s.multiplier:multiplierOf(s.dayType,band);
-    const hrs=(eMin-sMin)/60;
+    const hrs=segHours(s.start,s.end);
     const isSatDay=(s.dayType==='sat'&&band==='day');
     const raw={},amt90={}; let segTotal=0;
     billed.forEach(id=>{const r=round2(rate[id]*hrs*mult);raw[id]=r;segTotal+=r;});
@@ -364,7 +373,7 @@ function renderJob(){
   const segHtml=draft.segments.map((s,i)=>{
     const band=bandOf(toMin(s.start));
     const mult=multiplierOf(s.dayType,band);
-    const hrs=(toMin(s.end)-toMin(s.start))/60;
+    const hrs=segHours(s.start,s.end);
     const warn=(toMin(s.end)<=toMin(s.start))?'<span style="color:var(--red)">⚠ เวลาเสร็จต้องมากกว่าเริ่ม</span>':'';
     return `<div class="seg-line" data-seg="${i}">
       <div><label>เริ่ม</label><select data-f="start">${timeOptions(s.start)}</select></div>
@@ -600,13 +609,13 @@ function renderClearResult(){
 
 /* ===================== PAGE 4: EMPLOYEES ===================== */
 function renderEmp(){
-  const rows=DB.employees.map(e=>`<tr data-id="${e.id}">
+  const rows=[...DB.employees].sort((a,b)=>(Number(b.salary)||0)-(Number(a.salary)||0)).map(e=>`<tr data-id="${e.id}">
     <td><input data-f="name" value="${esc(e.name)}"></td>
     <td><input data-f="salary" type="number" inputmode="numeric" value="${esc(e.salary)}" style="text-align:right"></td>
     <td class="money">${fmt(round2(e.salary/210))}</td>
     <td><button class="x" data-del="${e.id}">✕</button></td></tr>`).join('');
   $('tab-emp').innerHTML=`<h2>รายชื่อช่าง + เงินเดือน</h2>
-    <div class="note">เรท/ชม. = ฐานเงินเดือน ÷ 210 (คำนวณอัตโนมัติ) · ไม่ต้องใส่ พขร. ในตารางนี้</div>
+    <div class="note">เรท/ชม. = ฐานเงินเดือน ÷ 210 (คำนวณอัตโนมัติ) · เรียงตามเงินเดือนมาก→น้อย · ไม่ต้องใส่ พขร. ในตารางนี้</div>
     <div class="card">
       <table><thead><tr><th>ชื่อเล่น</th><th class="money">ฐานเงินเดือน</th><th class="money">เรท/ชม.</th><th></th></tr></thead>
       <tbody>${rows||'<tr><td colspan="4" class="small">ยังไม่มีรายชื่อ</td></tr>'}</tbody></table>
