@@ -102,6 +102,9 @@
   .x{background:none;color:var(--red);padding:6px;font-size:20px;line-height:1;box-shadow:none}
   .small{font-size:13px;color:var(--muted)}
   .accent{color:var(--green-d);font-weight:800}
+  .datewrap{position:relative}
+  .date-display{padding:11px 12px;border:1.5px solid var(--line);border-radius:var(--r-sm);background:#fff;font-weight:600;color:var(--ink);min-height:46px;display:flex;align-items:center;cursor:pointer}
+  .datewrap input[type=date]{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;padding:0;margin:0;border:0}
   .footer-bar{position:fixed;bottom:0;left:0;right:0;background:rgba(255,255,255,.96);backdrop-filter:blur(8px);
     border-top:1px solid var(--line);display:flex;gap:8px;padding:9px 12px;z-index:20;justify-content:center;flex-wrap:wrap;box-shadow:0 -2px 12px rgba(0,0,0,.05)}
   .footer-bar button{font-size:13px;padding:9px 12px}
@@ -361,8 +364,16 @@ function timeOptions(sel){
   return o;
 }
 
+function fmtThaiDate(d){
+  if(!d) return '';
+  const dt=new Date(d+'T00:00');
+  const day=THAI_DAYS[dt.getDay()];
+  const t=dt.toLocaleDateString('th-TH',{day:'numeric',month:'short',year:'numeric'});
+  return day+' · '+t;
+}
+
 /* ===================== PAGE 1: ADD JOB ===================== */
-let draft={date:'',segments:[],marks:{}}; let editingId=null;
+let draft={date:'',segments:[],marks:{},jobName:''}; let editingId=null;
 function blankSeg(dt){return {start:'17:00',end:'20:00',dayType:dt||'weekday'};}
 
 function renderJob(){
@@ -401,8 +412,13 @@ function renderJob(){
     ${DB.employees.length===0?'<div class="note">ยังไม่มีรายชื่อช่าง — ไปที่แท็บ <b>รายชื่อ</b> เพื่อเพิ่มช่างและฐานเงินเดือนก่อน</div>':''}
     <div class="card">
       <div class="row">
-        <div><label>วันที่</label><input type="date" id="j-date" value="${draft.date}"></div>
-        <div><label>ชื่อวัน</label><input value="${dName}" disabled></div>
+        <div><label>วันที่</label>
+          <div class="datewrap">
+            <div id="date-display" class="date-display"><span>${fmtThaiDate(draft.date)||'เลือกวันที่'}</span><span style="margin-left:auto;opacity:.5">📅</span></div>
+            <input type="date" id="j-date" value="${draft.date}">
+          </div>
+        </div>
+        <div><label>ชื่องาน (บันทึกกันลืม)</label><input id="j-name" value="${esc(draft.jobName||'')}" placeholder="เช่น เปลี่ยนลูกถ้วย ม.5 บ้านหนองโพ"></div>
       </div>
     </div>
     <div class="card">
@@ -432,6 +448,7 @@ function bindJob(){
     draft.segments.forEach(s=>s.dayType=dt);
     renderJob();
   });
+  const jn=$('j-name'); if(jn) jn.addEventListener('input',e=>{ draft.jobName=e.target.value; });
   $('seg-list').addEventListener('change',e=>{
     const line=e.target.closest('[data-seg]'); if(!line)return;
     const i=+line.dataset.seg, f=e.target.dataset.f; if(!f)return;
@@ -451,7 +468,7 @@ function bindJob(){
   });
   $('tab-job').querySelector('[data-act="savejob"]').addEventListener('click',onSaveJob);
   const ce=$('tab-job').querySelector('[data-act="canceledit"]');
-  if(ce) ce.addEventListener('click',()=>{ draft={date:'',segments:[],marks:{}}; editingId=null; showTab('history'); });
+  if(ce) ce.addEventListener('click',()=>{ draft={date:'',segments:[],marks:{},jobName:''}; editingId=null; showTab('history'); });
 }
 function draftToJob(){
   const present=[],absent=[];
@@ -459,7 +476,7 @@ function draftToJob(){
     if(draft.marks[id]==='present')present.push(id);
     else if(draft.marks[id]==='absent')absent.push(id);
   });
-  return {date:draft.date,dayName:draft.date?THAI_DAYS[new Date(draft.date+'T00:00').getDay()]:'',
+  return {date:draft.date,jobName:(draft.jobName||'').trim(),dayName:draft.date?THAI_DAYS[new Date(draft.date+'T00:00').getDay()]:'',
     segments:draft.segments.map(s=>({...s})),present,absentBilled:absent,cleared:false};
 }
 function renderPreview(){
@@ -476,7 +493,7 @@ function onSaveJob(){
   job.id=editingId||uid();
   const wasEdit=!!editingId;
   saveJob(job).then(()=>{
-    draft={date:'',segments:[],marks:{}}; editingId=null;
+    draft={date:'',segments:[],marks:{},jobName:''}; editingId=null;
     alert(wasEdit?'อัปเดตงานแล้ว ✓':'บันทึกงานแล้ว ✓');
     if(wasEdit) showTab('history'); else renderJob();
   }).catch(err=>alert('บันทึกไม่สำเร็จ: '+err));
@@ -502,7 +519,7 @@ function draftMark(id){return draft.marks?draft.marks[id]||'':'';}
 function editJob(id){
   const j=DB.jobs.find(x=>x.id===id); if(!j)return;
   editingId=id;
-  draft={date:j.date||'', segments:(j.segments||[]).map(s=>({...s})), marks:{}};
+  draft={date:j.date||'', segments:(j.segments||[]).map(s=>({...s})), marks:{}, jobName:j.jobName||''};
   (j.present||[]).forEach(pid=>draft.marks[pid]='present');
   (j.absentBilled||[]).forEach(pid=>draft.marks[pid]='absent');
   showTab('job');
@@ -523,7 +540,7 @@ function jobCard(j){
   const c=calcJob(j,DB.employees);
   const segTxt=j.segments.map(s=>`${s.start}–${s.end} (${multLabel(multiplierOf(s.dayType,bandOf(toMin(s.start))))})`).join(' · ');
   return `<details><summary>
-      <span>${esc(j.date)} <b>${esc(j.dayName||'')}</b></span>
+      <span>${j.jobName?`<b>${esc(j.jobName)}</b> · `:''}${esc(j.dayName||'')} ${esc(j.date)}</span>
       <span class="money accent">${fmt(c.grandTotal)} ฿</span>
     </summary><div class="body">
       <div class="small" style="margin-bottom:8px">${segTxt}</div>
@@ -555,7 +572,7 @@ function renderClear(){
     const c=calcJob(j,DB.employees);
     return `<label class="emp-pick" style="cursor:pointer">
       <span><input type="checkbox" data-pick="${j.id}" ${clearSel.has(j.id)?'checked':''} style="width:auto;margin-right:8px">
-      ${esc(j.date)} ${esc(j.dayName||'')}</span>
+      ${esc(j.dayName||'')} ${esc(j.date)}${j.jobName?' · '+esc(j.jobName):''}</span>
       <span class="money small">${fmt(c.grandTotal)} ฿</span></label>`;
   }).join('');
   $('tab-clear').innerHTML=`<h2>เคลียร์ค่าล่วงเวลา</h2>
@@ -667,7 +684,7 @@ function showTab(t){
 }
 function bindShell(){
   document.querySelectorAll('.nav button').forEach(b=>b.addEventListener('click',()=>{
-    if(b.dataset.tab==='job'){ draft={date:'',segments:[],marks:{}}; editingId=null; }
+    if(b.dataset.tab==='job'){ draft={date:'',segments:[],marks:{},jobName:''}; editingId=null; }
     showTab(b.dataset.tab);
   }));
   $('ft-export').addEventListener('click',()=>{
