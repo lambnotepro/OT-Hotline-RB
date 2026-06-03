@@ -228,9 +228,11 @@ function toMin(t){const[h,m]=String(t).split(':').map(Number);return h*60+m;}
 /* คิดชั่วโมงจริง = (เสร็จ−เริ่ม) แล้วหักช่วงที่คาบเกี่ยวพักเที่ยง 12:00–13:00 (720–780 นาที)
    เช่น 09:00–16:00 → (960−540−60)/60 = 6.0 ชม.  /  ช่วงที่ไม่คาบเที่ยงจะไม่ถูกหัก */
 function segHours(start,end){
-  const s=toMin(start),e=toMin(end);
-  let mins=Math.max(0,e-s);
-  const lunch=Math.max(0,Math.min(e,780)-Math.max(s,720));
+  const s=toMin(start); let e=toMin(end);
+  if(e<s) e+=1440;          // "00:00" = สิ้นวัน (24:00) / เผื่อข้ามเที่ยงคืน
+  if(e===s) return 0;       // เวลาเท่ากัน = 0 ชม.
+  let mins=e-s;
+  const lunch=Math.max(0,Math.min(e,780)-Math.max(s,720)); // หักพักเที่ยง 12:00–13:00
   return Math.max(0,mins-lunch)/60;
 }
 function bandOf(sMin){return (sMin>=480&&sMin<1020)?'day':'night';}
@@ -389,13 +391,13 @@ function renderJob(){
     const band=bandOf(toMin(s.start));
     const mult=multiplierOf(s.dayType,band);
     const hrs=segHours(s.start,s.end);
-    const warn=(toMin(s.end)<=toMin(s.start))?'<span style="color:var(--red)">⚠ เวลาเสร็จต้องมากกว่าเริ่ม</span>':'';
+    const warn=(hrs<=0)?'<span style="color:var(--red)">⚠ เวลาไม่ถูกต้อง (เสร็จต้องไม่เท่ากับเริ่ม)</span>':'';
     return `<div class="seg-line" data-seg="${i}">
       <div><label>เริ่ม</label><select data-f="start">${timeOptions(s.start)}</select></div>
       <div><label>เสร็จ</label><select data-f="end">${timeOptions(s.end)}</select></div>
       <div><label>ประเภทวัน</label><select data-f="dayType">${DAY_TYPES.map(d=>`<option value="${d[0]}" ${d[0]===s.dayType?'selected':''}>${d[1]}</option>`).join('')}</select></div>
       <div class="rm"><label>&nbsp;</label><button class="x" data-act="rmseg" data-i="${i}">✕</button></div>
-      <div class="seg-info">${hrs>0?hrs.toFixed(1):'0'} ชม. · ${multLabel(mult)} ${s.dayType==='sat'&&band==='day'?'· <span class="accent">เสาร์กลางวัน (พขร.ได้ชื่อเต็ม)</span>':''} ${warn}</div>
+      <div class="seg-info">${hrs>0?hrs.toFixed(1):'0'} ชม. · ${multLabel(mult)} ${s.dayType==='sat'&&band==='day'?'· <span class="accent">เสาร์กลางวัน (พขร.ได้ชื่อเต็ม)</span>':''} ${s.afterMidnight?'· <span class="accent">ช่วงข้ามเที่ยงคืน — เลือกประเภทวันใหม่</span>':''} ${warn}</div>
     </div>`;
   }).join('');
 
@@ -440,6 +442,12 @@ function renderJob(){
   bindJob();
   renderPreview();
 }
+function nextDayTypeFromDate(d){
+  if(!d) return 'weekday';
+  const dt=new Date(d+'T00:00'); dt.setDate(dt.getDate()+1);
+  const g=dt.getDay();
+  if(g===0)return 'sun'; if(g===6)return 'sat'; return 'weekday';
+}
 function dayTypeFromDate(d){
   if(!d) return 'weekday';
   const g=new Date(d+'T00:00').getDay();
@@ -457,7 +465,14 @@ function bindJob(){
   $('seg-list').addEventListener('change',e=>{
     const line=e.target.closest('[data-seg]'); if(!line)return;
     const i=+line.dataset.seg, f=e.target.dataset.f; if(!f)return;
-    draft.segments[i][f]=e.target.value; renderJob();
+    draft.segments[i][f]=e.target.value;
+    const seg=draft.segments[i];
+    // งานข้ามเที่ยงคืน: เวลาเสร็จน้อยกว่าเริ่ม (และไม่ใช่ 00:00 = สิ้นวัน) → แยกเป็น 2 ช่วง
+    if(seg.end!=='00:00' && toMin(seg.end)<toMin(seg.start)){
+      const after=seg.end; seg.end='00:00';
+      draft.segments.splice(i+1,0,{start:'00:00',end:after,dayType:nextDayTypeFromDate(draft.date),afterMidnight:true});
+    }
+    renderJob();
   });
   $('tab-job').querySelectorAll('[data-act="rmseg"]').forEach(b=>b.addEventListener('click',()=>{
     draft.segments.splice(+b.dataset.i,1); renderJob();
@@ -494,7 +509,7 @@ function onSaveJob(){
   const job=draftToJob();
   if(!job.date){alert('เลือกวันที่ก่อน');return;}
   if(!job.present.length&&!job.absentBilled.length){alert('เลือกคนอย่างน้อย 1 คน');return;}
-  for(const s of job.segments){ if(toMin(s.end)<=toMin(s.start)){alert('มีช่วงเวลาที่เวลาเสร็จไม่มากกว่าเวลาเริ่ม');return;} }
+  for(const s of job.segments){ if(segHours(s.start,s.end)<=0){alert('มีช่วงเวลาที่ชั่วโมงเป็น 0 หรือไม่ถูกต้อง');return;} }
   job.id=editingId||uid();
   const wasEdit=!!editingId;
   saveJob(job).then(()=>{
