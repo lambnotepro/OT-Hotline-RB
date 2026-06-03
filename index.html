@@ -370,10 +370,11 @@ function timeOptions(sel){
 function fmtThaiDate(d){
   if(!d) return '';
   const dt=new Date(d+'T00:00');
-  const day=THAI_DAYS[dt.getDay()];
-  const t=dt.toLocaleDateString('th-TH',{day:'numeric',month:'short',year:'numeric'});
-  return day+' · '+t;
+  return THAI_DAYS[dt.getDay()]+' '+dt.toLocaleDateString('th-TH',{day:'numeric',month:'short'});
 }
+function fmtDM(d){ if(!d) return ''; return new Date(d+'T00:00').toLocaleDateString('th-TH',{day:'numeric',month:'short'}); }
+function beYear(d){ if(!d) return ''; return new Date(d+'T00:00').getFullYear()+543; }
+function yearsLabel(arr){ return [...new Set(arr.filter(Boolean).map(beYear))].sort().join(', '); }
 
 /* ===================== PAGE 1: ADD JOB ===================== */
 let draft={date:'',segments:[],marks:{},jobName:''}; let editingId=null;
@@ -532,7 +533,8 @@ function editJob(id){
 /* ===================== PAGE 2: HISTORY ===================== */
 function renderHistory(){
   const jobs=DB.jobs.filter(j=>!j.cleared).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-  $('tab-history').innerHTML=`<h2>ประวัติงาน (ยังไม่เคลียร์)</h2>
+  const histYears=yearsLabel(jobs.map(j=>j.date));
+  $('tab-history').innerHTML=`<h2>ประวัติงาน (ยังไม่เคลียร์)${histYears?` <span class="small" style="font-weight:600">· ปี ${histYears}</span>`:''}</h2>
     ${jobs.length===0?'<div class="note">ยังไม่มีงานค้าง</div>':jobs.map(jobCard).join('')}`;
   $('tab-history').querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',()=>{
     if(confirm('ลบงานวันที่ '+b.dataset.date+' ?')) deleteJob(b.dataset.del).then(renderHistory);
@@ -543,7 +545,7 @@ function jobCard(j){
   const c=calcJob(j,DB.employees);
   const segTxt=j.segments.map(s=>`${s.start}–${s.end} (${multLabel(multiplierOf(s.dayType,bandOf(toMin(s.start))))})`).join(' · ');
   return `<details><summary>
-      <span>${j.jobName?`<b>${esc(j.jobName)}</b> · `:''}${esc(j.dayName||'')} ${esc(j.date)}</span>
+      <span>${j.jobName?`<b>${esc(j.jobName)}</b> · `:''}${esc(fmtThaiDate(j.date))}</span>
       <span class="money accent">${fmt(c.grandTotal)} ฿</span>
     </summary><div class="body">
       <div class="small" style="margin-bottom:8px">${segTxt}</div>
@@ -582,7 +584,7 @@ function renderClear(){
     const c=calcJob(j,DB.employees);
     return `<label class="emp-pick" style="cursor:pointer">
       <span><input type="checkbox" data-pick="${j.id}" ${clearSel.has(j.id)?'checked':''} style="width:auto;margin-right:8px">
-      ${esc(j.dayName||'')} ${esc(j.date)}${j.jobName?' · '+esc(j.jobName):''}</span>
+      ${esc(fmtThaiDate(j.date))}${j.jobName?' · '+esc(j.jobName):''}</span>
       <span class="money small">${fmt(c.grandTotal)} ฿</span></label>`;
   }).join('');
   $('tab-clear').innerHTML=`<h2>เคลียร์ค่าล่วงเวลา</h2>
@@ -600,25 +602,33 @@ function renderClear(){
 function renderClearResult(){
   const sel=DB.jobs.filter(j=>clearSel.has(j.id));
   if(!sel.length){alert('เลือกงานอย่างน้อย 1 งาน');return;}
-  const agg={}, days={}; let grand=0;
-  const ensure=id=>{if(!(id in agg)){agg[id]=0;days[id]=[];}};
+  const amt={}, days={}, billed={}; let grand=0;
+  DB.employees.forEach(e=>{amt[e.id]=0;days[e.id]=[];billed[e.id]=false;});
+  amt[DRIVER]=0;days[DRIVER]=[];amt[MAK]=0;days[MAK]=[];
   sel.forEach(j=>{
     const c=calcJob(j,DB.employees);
     grand=round2(grand+c.grandTotal);
-    Object.keys(c.result).forEach(id=>{
-      if((c.result[id]||0)===0 && id!==MAK && id!==DRIVER) return;
-      ensure(id); agg[id]=round2(agg[id]+(c.result[id]||0));
-      if((c.result[id]||0)>0) days[id].push(j.date);
-    });
-    j.present.forEach(id=>{ensure(id); if(!days[id].includes(j.date)&&(c.result[id]||0)>0)days[id].push(j.date);});
+    (j.present||[]).forEach(id=>{ if(id in billed){billed[id]=true; if((c.result[id]||0)>0&&!days[id].includes(j.date))days[id].push(j.date);} });
+    (j.absentBilled||[]).forEach(id=>{ if(id in billed) billed[id]=true; });
+    Object.keys(c.result).forEach(id=>{ if(id in amt) amt[id]=round2(amt[id]+(c.result[id]||0)); });
+    if((c.result[DRIVER]||0)>0&&!days[DRIVER].includes(j.date))days[DRIVER].push(j.date);
+    if((c.result[MAK]||0)>0&&!days[MAK].includes(j.date))days[MAK].push(j.date);
   });
-  const order=[...DB.employees.map(e=>e.id),DRIVER,MAK];
+  const techs=[...DB.employees].sort((a,b)=>{
+    const d=(amt[b.id]||0)-(amt[a.id]||0); if(d!==0) return d;
+    return (billed[b.id]?1:0)-(billed[a.id]?1:0);
+  });
   let rows='';
-  order.forEach(id=>{ if(id in agg){
-    rows+=`<tr><td>${esc(nameById(id))}</td><td class="small">${(days[id]||[]).join(', ')}</td><td class="money">${fmt(agg[id])}</td></tr>`;
-  }});
+  techs.forEach(e=>{
+    const cell=billed[e.id]?fmt(amt[e.id]):'<span class="small">–</span>';
+    rows+=`<tr><td>${esc(e.name)}</td><td class="small">${(days[e.id]||[]).map(fmtDM).join(', ')}</td><td class="money">${cell}</td></tr>`;
+  });
+  [DRIVER,MAK].forEach(id=>{
+    rows+=`<tr><td>${esc(nameById(id))}</td><td class="small">${(days[id]||[]).map(fmtDM).join(', ')}</td><td class="money">${fmt(amt[id])}</td></tr>`;
+  });
+  const yl=yearsLabel(sel.map(j=>j.date));
   $('clear-result').innerHTML=`<div class="card">
-    <h3>สรุปยอดเคลียร์ (${sel.length} งาน)</h3>
+    <h3>สรุปยอดเคลียร์ (${sel.length} งาน)${yl?` · ปี ${yl}`:''}</h3>
     <table><thead><tr><th>คน</th><th>มาวันที่</th><th class="money">รวมบาท</th></tr></thead>
     <tbody>${rows}<tr class="tot-row"><td>รวมทั้งหมด</td><td></td><td class="money">${fmt(grand)}</td></tr></tbody></table>
     <div style="margin-top:12px" class="row">
