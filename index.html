@@ -532,7 +532,7 @@ function editJob(id){
 
 /* ===================== PAGE 2: HISTORY ===================== */
 function renderHistory(){
-  const jobs=DB.jobs.filter(j=>!j.cleared).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const jobs=DB.jobs.filter(j=>!j.cleared).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
   const histYears=yearsLabel(jobs.map(j=>j.date));
   $('tab-history').innerHTML=`<h2>ประวัติงาน (ยังไม่เคลียร์)${histYears?` <span class="small" style="font-weight:600">· ปี ${histYears}</span>`:''}</h2>
     ${jobs.length===0?'<div class="note">ยังไม่มีงานค้าง</div>':jobs.map(jobCard).join('')}`;
@@ -621,10 +621,10 @@ function renderClearResult(){
   let rows='';
   techs.forEach(e=>{
     const cell=billed[e.id]?fmt(amt[e.id]):'<span class="small">–</span>';
-    rows+=`<tr><td>${esc(e.name)}</td><td class="small">${(days[e.id]||[]).map(fmtDM).join(', ')}</td><td class="money">${cell}</td></tr>`;
+    rows+=`<tr><td>${esc(e.name)}</td><td class="small">${(days[e.id]||[]).slice().sort().map(fmtDM).join(', ')}</td><td class="money">${cell}</td></tr>`;
   });
   [DRIVER,MAK].forEach(id=>{
-    rows+=`<tr><td>${esc(nameById(id))}</td><td class="small">${(days[id]||[]).map(fmtDM).join(', ')}</td><td class="money">${fmt(amt[id])}</td></tr>`;
+    rows+=`<tr><td>${esc(nameById(id))}</td><td class="small">${(days[id]||[]).slice().sort().map(fmtDM).join(', ')}</td><td class="money">${fmt(amt[id])}</td></tr>`;
   });
   const yl=yearsLabel(sel.map(j=>j.date));
   $('clear-result').innerHTML=`<div class="card">
