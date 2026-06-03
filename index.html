@@ -452,6 +452,7 @@ function bindJob(){
     draft.segments.forEach(s=>s.dayType=dt);
     renderJob();
   });
+  (()=>{ const jd=$('j-date'); if(jd) jd.addEventListener('click',()=>{ try{ if(jd.showPicker) jd.showPicker(); }catch(err){} }); })();
   const jn=$('j-name'); if(jn) jn.addEventListener('input',e=>{ draft.jobName=e.target.value; });
   $('seg-list').addEventListener('change',e=>{
     const line=e.target.closest('[data-seg]'); if(!line)return;
