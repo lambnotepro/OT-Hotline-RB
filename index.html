@@ -53,6 +53,9 @@
   .pill-b{background:#e9e9f8;color:var(--blue)}
   .pill-m{background:#eef0ee;color:var(--muted)}
   .pill-n{background:#f1f3f1;color:#aab0aa}
+  .pill-s{background:#e7f0ff;color:#1a5bd6}
+  .assign-row{display:flex;align-items:center;gap:8px;padding:9px 2px 11px 14px;flex-wrap:wrap;background:#f7faf7;border-bottom:1px solid var(--line)}
+  .assign-row select{width:auto;flex:1;min-width:150px;max-width:240px}
   table{width:100%;border-collapse:collapse;font-size:15px}
   th,td{padding:10px 8px;border-bottom:1px solid var(--line);text-align:left}
   th{font-size:12px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px}
@@ -199,6 +202,8 @@ label{color:var(--muted)}
 .pill-r{background:rgba(255,93,115,.16) !important; color:#ffc2cc !important}
 .pill-b{background:rgba(106,168,255,.16) !important; color:#cfe0ff !important}
 .pill-m,.pill-n{background:rgba(160,180,255,.10) !important; color:#9fb0e0 !important}
+.pill-s{background:rgba(106,168,255,.20) !important; color:#bcd6ff !important}
+.assign-row{background:rgba(8,12,30,.45) !important; border-bottom:1px solid var(--line) !important}
 
 /* table */
 th{color:var(--muted)}
@@ -361,8 +366,18 @@ function calcJob(job,employees){
   const present=(job.present||[]).filter(id=>rate[id]!=null);
   const absent=(job.absentBilled||[]).filter(id=>rate[id]!=null);
   const billed=present.concat(absent);
+  // รับโอนชื่อ: คนสถานะ "-" (ลามาทำงาน) รับค่าล่วงเวลาของคน "ไม่มาแต่มีชื่อเบิก"
+  const presentSet=new Set(present), absentSet=new Set(absent);
+  const takeover={}; const takenAbsent=new Set();
+  Object.entries(job.takeover||{}).forEach(([taker,aid])=>{
+    if(rate[taker]!=null && !presentSet.has(taker) && !absentSet.has(taker)
+       && absentSet.has(aid) && !takenAbsent.has(aid) && taker!==aid){
+      takeover[taker]=aid; takenAbsent.add(aid);
+    }
+  });
+  const takers=Object.keys(takeover);
   (job.segments||[]).forEach((s,idx)=>{
-    const sMin=toMin(s.start),eMin=toMin(s.end),band=bandOf(sMin);
+    const sMin=toMin(s.start),band=bandOf(sMin);
     const mult=(s.multiplier!=null)?s.multiplier:multiplierOf(s.dayType,band);
     const hrs=segHours(s.start,s.end);
     const isSatDay=(s.dayType==='sat'&&band==='day');
@@ -371,22 +386,28 @@ function calcJob(job,employees){
     segTotal=round2(segTotal);
     const makSeg=round2(segTotal*0.10); makTotal=round2(makTotal+makSeg);
     billed.forEach(id=>{amt90[id]=round2(raw[id]*0.90);});
-    const recipients=present.concat([DRIVER]);
-    let driverBonus=0, poolAbsent=absent.slice();
-    if(absent.length>0&&isSatDay){
-      let low=absent[0]; absent.forEach(id=>{if(salaryOf[id]<salaryOf[low])low=id;});
-      driverBonus=amt90[low]; poolAbsent=absent.filter(id=>id!==low);
+    // ชื่อที่ถูกตัดออก (ไม่เข้ากองหาร): ที่ takers รับไป + (เสาร์กลางวัน) คนต่ำสุดให้ พขร.
+    const setAside=new Set(takenAbsent);
+    let driverBonus=0;
+    if(isSatDay){
+      const remain=absent.filter(id=>!setAside.has(id));
+      if(remain.length>0){
+        let low=remain[0]; remain.forEach(id=>{if(salaryOf[id]<salaryOf[low])low=id;});
+        driverBonus=amt90[low]; setAside.add(low);
+      }
     }
-    let poolSum=0; poolAbsent.forEach(id=>{poolSum=round2(poolSum+amt90[id]);});
+    let poolSum=0; absent.forEach(id=>{ if(!setAside.has(id)) poolSum=round2(poolSum+amt90[id]); });
+    const recipients=present.concat(takers,[DRIVER]);
     let share=0; if(recipients.length>0&&poolSum>0) share=round2(poolSum/recipients.length);
     present.forEach(id=>{result[id]=round2((result[id]||0)+amt90[id]+(poolSum>0?share:0));});
+    takers.forEach(id=>{result[id]=round2((result[id]||0)+amt90[takeover[id]]+(poolSum>0?share:0));});
     absent.forEach(id=>{result[id]=round2(result[id]||0);});
     result[DRIVER]=round2(result[DRIVER]+driverBonus+(poolSum>0?share:0));
-    seg.push({idx,start:s.start,end:s.end,dayType:s.dayType,band,mult,hrs,segTotal,makSeg,share,driverBonus,isSatDay,raw,amt90,poolAbsent:poolAbsent.slice()});
+    seg.push({idx,start:s.start,end:s.end,dayType:s.dayType,band,mult,hrs,segTotal,makSeg,share,driverBonus,isSatDay});
   });
   result[MAK]=makTotal;
   const grandTotal=round2(Object.keys(result).reduce((a,k)=>a+result[k],0));
-  return {result,makTotal,seg,grandTotal};
+  return {result,makTotal,seg,grandTotal,takeover};
 }
 
 /* ---------- storage ---------- */
@@ -489,7 +510,7 @@ function beYear(d){ if(!d) return ''; return new Date(d+'T00:00').getFullYear()+
 function yearsLabel(arr){ return [...new Set(arr.filter(Boolean).map(beYear))].sort().join(', '); }
 
 /* ===================== PAGE 1: ADD JOB ===================== */
-let draft={date:'',segments:[],marks:{},jobName:''}; let editingId=null;
+let draft={date:'',segments:[],marks:{},jobName:'',takeover:{}}; let editingId=null;
 function blankSeg(dt){return {start:'17:00',end:'20:00',dayType:dt||'weekday'};}
 
 function renderJob(){
@@ -511,15 +532,30 @@ function renderJob(){
     </div>`;
   }).join('');
 
+  const absentList=[...DB.employees].filter(e=>draft.marks[e.id]==='absent').map(e=>e.id);
   const empHtml=[...DB.employees].sort((a,b)=>(Number(b.salary)||0)-(Number(a.salary)||0)).map(e=>{
     const m=draft.marks[e.id]||'';
-    return `<div class="emp-pick" data-emp="${e.id}">
+    let block=`<div class="emp-pick" data-emp="${e.id}">
       <span class="nm">${esc(e.name)} <span class="small">(${fmt(round2(e.salary/210))}/ชม.)</span></span>
       <div class="tri">
         <button data-mark="present" class="${m==='present'?'on-g':''}">มาจริง</button>
         <button data-mark="absent" class="${m==='absent'?'on-r':''}">ไม่มา(เบิก)</button>
         <button data-mark="" class="${m===''?'on-m':''}">—</button>
       </div></div>`;
+    if(m===''&&absentList.length>0){
+      const takenByOthers=new Set(Object.entries(draft.takeover||{}).filter(([t,a])=>t!==e.id).map(([t,a])=>a));
+      const cur=(draft.takeover||{})[e.id]||'';
+      const opts=absentList.filter(aid=>!takenByOthers.has(aid));
+      if(opts.length>0||cur){
+        block+=`<div class="assign-row">
+          <span class="small">↳ ลามาทำงาน รับชื่อคนเบิก:</span>
+          <select data-assign="${e.id}">
+            <option value="">— ไม่รับ —</option>
+            ${opts.map(aid=>`<option value="${aid}" ${aid===cur?'selected':''}>${esc(nameById(aid))}</option>`).join('')}
+          </select></div>`;
+      }
+    }
+    return block;
   }).join('');
 
   $('tab-job').innerHTML=`
@@ -593,21 +629,35 @@ function bindJob(){
   $('tab-job').querySelectorAll('.emp-pick').forEach(p=>{
     const id=p.dataset.emp;
     p.querySelectorAll('[data-mark]').forEach(b=>b.addEventListener('click',()=>{
-      draft.marks[id]=b.dataset.mark; renderJob();
+      draft.marks[id]=b.dataset.mark;
+      if(b.dataset.mark!=='') delete draft.takeover[id];
+      cleanTakeover(); renderJob();
     }));
   });
+  $('tab-job').querySelectorAll('[data-assign]').forEach(sel=>sel.addEventListener('change',()=>{
+    const id=sel.dataset.assign;
+    if(sel.value) draft.takeover[id]=sel.value; else delete draft.takeover[id];
+    renderJob();
+  }));
   $('tab-job').querySelector('[data-act="savejob"]').addEventListener('click',onSaveJob);
   const ce=$('tab-job').querySelector('[data-act="canceledit"]');
-  if(ce) ce.addEventListener('click',()=>{ draft={date:'',segments:[],marks:{},jobName:''}; editingId=null; showTab('history'); });
+  if(ce) ce.addEventListener('click',()=>{ draft={date:'',segments:[],marks:{},jobName:'',takeover:{}}; editingId=null; showTab('history'); });
+}
+function cleanTakeover(){
+  if(!draft.takeover) draft.takeover={};
+  const absentIds=new Set(Object.keys(draft.marks).filter(id=>draft.marks[id]==='absent'));
+  Object.keys(draft.takeover).forEach(t=>{ const a=draft.takeover[t];
+    if((draft.marks[t]||'')!=='' || !absentIds.has(a)) delete draft.takeover[t]; });
 }
 function draftToJob(){
+  cleanTakeover();
   const present=[],absent=[];
   Object.keys(draft.marks).forEach(id=>{
     if(draft.marks[id]==='present')present.push(id);
     else if(draft.marks[id]==='absent')absent.push(id);
   });
   return {date:draft.date,jobName:(draft.jobName||'').trim(),dayName:draft.date?THAI_DAYS[new Date(draft.date+'T00:00').getDay()]:'',
-    segments:draft.segments.map(s=>({...s})),present,absentBilled:absent,cleared:false};
+    segments:draft.segments.map(s=>({...s})),present,absentBilled:absent,takeover:{...(draft.takeover||{})},cleared:false};
 }
 function renderPreview(){
   const job=draftToJob();
@@ -623,7 +673,7 @@ function onSaveJob(){
   job.id=editingId||uid();
   const wasEdit=!!editingId;
   saveJob(job).then(()=>{
-    draft={date:'',segments:[],marks:{},jobName:''}; editingId=null;
+    draft={date:'',segments:[],marks:{},jobName:'',takeover:{}}; editingId=null;
     alert(wasEdit?'อัปเดตงานแล้ว ✓':'บันทึกงานแล้ว ✓');
     if(wasEdit) showTab('history'); else renderJob();
   }).catch(err=>alert('บันทึกไม่สำเร็จ: '+err));
@@ -637,19 +687,19 @@ function resultTable(c){
   rows.push([DB.config.makName||'แม็ก',c.result[MAK]||0,'แม็ก 10%']);
   let html='<table><thead><tr><th>คน</th><th></th><th class="money">บาท</th></tr></thead><tbody>';
   rows.forEach(r=>{
-    const tag=r[2]==='present'?'<span class="pill pill-g">มา</span>':r[2]==='absent'?'<span class="pill pill-r">ไม่มา</span>':r[2]==='พขร.'?'<span class="pill pill-b">พขร.</span>':r[2]==='แม็ก 10%'?'<span class="pill pill-m">แม็ก</span>':'';
+    const tag=r[2]==='present'?'<span class="pill pill-g">มา</span>':r[2]==='absent'?'<span class="pill pill-r">ไม่มา</span>':r[2]==='sub'?'<span class="pill pill-s">มาแทน</span>':r[2]==='พขร.'?'<span class="pill pill-b">พขร.</span>':r[2]==='แม็ก 10%'?'<span class="pill pill-m">แม็ก</span>':'';
     html+=`<tr><td>${esc(r[0])}</td><td>${tag}</td><td class="money">${fmt(r[1])}</td></tr>`;
   });
   html+=`<tr class="tot-row"><td>รวม</td><td></td><td class="money">${fmt(c.grandTotal)}</td></tr>`;
   html+='</tbody></table>';
   return html;
 }
-function draftMark(id){return draft.marks?draft.marks[id]||'':'';}
+function draftMark(id){ if(draft.marks&&draft.marks[id])return draft.marks[id]; if(draft.takeover&&draft.takeover[id])return 'sub'; return ''; }
 
 function editJob(id){
   const j=DB.jobs.find(x=>x.id===id); if(!j)return;
   editingId=id;
-  draft={date:j.date||'', segments:(j.segments||[]).map(s=>({...s})), marks:{}, jobName:j.jobName||''};
+  draft={date:j.date||'', segments:(j.segments||[]).map(s=>({...s})), marks:{}, jobName:j.jobName||'', takeover:{...(j.takeover||{})}};
   (j.present||[]).forEach(pid=>draft.marks[pid]='present');
   (j.absentBilled||[]).forEach(pid=>draft.marks[pid]='absent');
   showTab('job');
@@ -682,16 +732,18 @@ function jobCard(j){
 }
 function resultTableJob(c,j){
   const present=new Set(j.present),absent=new Set(j.absentBilled);
-  const rank={present:1,driver:2,mak:2,absent:3,none:4};
+  const tk=c.takeover||{};
+  const rank={present:1,sub:1,driver:2,mak:2,absent:3,none:4};
   const rows=[];
   DB.employees.forEach(e=>{
-    const st=present.has(e.id)?'present':absent.has(e.id)?'absent':'none';
+    const st=present.has(e.id)?'present':absent.has(e.id)?'absent':(tk[e.id]?'sub':'none');
     rows.push({name:e.name,amt:c.result[e.id]||0,st});
   });
   rows.push({name:DB.config.driverName||'พขร.',amt:c.result[DRIVER]||0,st:'driver'});
   rows.push({name:DB.config.makName||'แม็ก',amt:c.result[MAK]||0,st:'mak'});
   rows.sort((a,b)=> (b.amt-a.amt) || (rank[a.st]-rank[b.st]));
   const tagOf=st=> st==='present'?'<span class="pill pill-g">มา</span>'
+    : st==='sub'?'<span class="pill pill-s">มาแทน</span>'
     : st==='absent'?'<span class="pill pill-r">ไม่มา</span>'
     : st==='driver'?'<span class="pill pill-b">พขร.</span>'
     : st==='mak'?'<span class="pill pill-m">แม็ก</span>'
@@ -736,6 +788,7 @@ function renderClearResult(){
     grand=round2(grand+c.grandTotal);
     (j.present||[]).forEach(id=>{ if(id in billed){billed[id]=true; if((c.result[id]||0)>0&&!days[id].includes(j.date))days[id].push(j.date);} });
     (j.absentBilled||[]).forEach(id=>{ if(id in billed) billed[id]=true; });
+    Object.keys(c.takeover||{}).forEach(id=>{ if(id in billed){billed[id]=true; if((c.result[id]||0)>0&&!days[id].includes(j.date))days[id].push(j.date);} });
     Object.keys(c.result).forEach(id=>{ if(id in amt) amt[id]=round2(amt[id]+(c.result[id]||0)); });
     if((c.result[DRIVER]||0)>0&&!days[DRIVER].includes(j.date))days[DRIVER].push(j.date);
     if((c.result[MAK]||0)>0&&!days[MAK].includes(j.date))days[MAK].push(j.date);
@@ -830,7 +883,7 @@ function showTab(t){
 }
 function bindShell(){
   document.querySelectorAll('.nav button').forEach(b=>b.addEventListener('click',()=>{
-    if(b.dataset.tab==='job'){ draft={date:'',segments:[],marks:{},jobName:''}; editingId=null; }
+    if(b.dataset.tab==='job'){ draft={date:'',segments:[],marks:{},jobName:'',takeover:{}}; editingId=null; }
     showTab(b.dataset.tab);
   }));
   $('ft-export').addEventListener('click',()=>{
