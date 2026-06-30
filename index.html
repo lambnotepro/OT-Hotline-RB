@@ -360,7 +360,14 @@ function multLabel(m){return m===0?'ไม่คิด (งานปกติ)':
 
 function calcJob(job,employees){
   const rate={},salaryOf={},nameOf={};
-  employees.forEach(e=>{rate[e.id]=round2(Number(e.salary)/210);salaryOf[e.id]=Number(e.salary);nameOf[e.id]=e.name;});
+  // ใช้ฐานเงินเดือน ณ ตอนบันทึกงาน (snapshot) ก่อนเสมอ — งานที่ลงไปแล้วจะไม่เปลี่ยนตามการแก้ฐานปีใหม่
+  const snap=job.salarySnapshot||null;
+  employees.forEach(e=>{
+    const sal=(snap&&snap[e.id]!=null)?Number(snap[e.id]):Number(e.salary);
+    rate[e.id]=round2(sal/210);salaryOf[e.id]=sal;nameOf[e.id]=e.name;
+  });
+  // เผื่อกรณีคนถูกลบจากรายชื่อปัจจุบันแล้ว แต่ยังมีใน snapshot ของงานเก่า
+  if(snap){ Object.keys(snap).forEach(id=>{ if(rate[id]==null){ rate[id]=round2(Number(snap[id])/210); salaryOf[id]=Number(snap[id]); nameOf[id]=nameById(id); } }); }
   const result={}; result[DRIVER]=0;
   const seg=[]; let makTotal=0;
   const present=(job.present||[]).filter(id=>rate[id]!=null);
@@ -656,8 +663,12 @@ function draftToJob(){
     if(draft.marks[id]==='present')present.push(id);
     else if(draft.marks[id]==='absent')absent.push(id);
   });
+  // snapshot ฐานเงินเดือน ณ ตอนนี้ (เก็บทุกคนที่เกี่ยวข้อง: มา/ไม่มา(เบิก)/รับโอนชื่อ)
+  const involved=new Set([...present,...absent,...Object.keys(draft.takeover||{}),...Object.values(draft.takeover||{})]);
+  const salarySnapshot={};
+  DB.employees.forEach(e=>{ if(involved.has(e.id)) salarySnapshot[e.id]=Number(e.salary)||0; });
   return {date:draft.date,jobName:(draft.jobName||'').trim(),dayName:draft.date?THAI_DAYS[new Date(draft.date+'T00:00').getDay()]:'',
-    segments:draft.segments.map(s=>({...s})),present,absentBilled:absent,takeover:{...(draft.takeover||{})},cleared:false};
+    segments:draft.segments.map(s=>({...s})),present,absentBilled:absent,takeover:{...(draft.takeover||{})},salarySnapshot,cleared:false};
 }
 function renderPreview(){
   const job=draftToJob();
